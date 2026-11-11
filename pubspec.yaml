@@ -1,0 +1,47 @@
+name: menzulka
+description: Мензулка — электронный абрис для геодезиста
+publish_to: 'none'
+version: 1.16.2+48
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  drift: ^2.14.0
+  sqlite3_flutter_libs: ^0.5.0
+  path_provider: ^2.1.0
+  path: ^1.8.0
+  image_picker: ^1.0.0
+  share_plus: ^10.0.0
+  pdf: ^3.10.0
+  connectivity_plus: ^6.1.5
+  vector_math: ^2.1.0
+  uuid: ^4.0.0
+  file_selector: ^1.0.3
+  file_picker: ^8.3.7
+  archive: ^3.6.1
+  crypto: ^3.0.0
+  image: ^4.3.0
+  record: ^7.1.2
+  audioplayers: ^6.8.1
+  package_info_plus: ^9.0.1
+  url_launcher: ^6.3.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+  drift_dev: ^2.14.0
+  build_runner: ^2.4.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/empty.dxf
+
+
+
+
+
