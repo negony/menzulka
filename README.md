@@ -1,3 +1,5 @@
+[![CI](https://github.com/negony/menzulka/actions/workflows/ci.yml/badge.svg)](https://github.com/negony/menzulka/actions/workflows/ci.yml)
+
 # Мензулка
 
 **Мензулка** — электронный абрис для геодезиста: приложение для работы на объекте.
@@ -9,6 +11,9 @@
 
 Платформы: **Android** (телефон/планшет) и **Windows** (настольная сборка с
 установщиком). Интерфейс на русском языке.
+
+**Скачать**: готовые сборки (APK для Android и установщик для Windows) — в разделе
+[Releases](https://github.com/negony/menzulka/releases).
 
 Исходный код: <https://github.com/negony/menzulka> — эта же ссылка есть в приложении
 (меню **«О программе»**).
