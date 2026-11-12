@@ -36,6 +36,28 @@ typedef _DwgToDxfDart = int Function(
   Pointer<UintPtr> errLen,
 );
 
+typedef _DxfToDwgNative = Int32 Function(
+  Pointer<Uint8> input,
+  UintPtr inputLen,
+  Pointer<Utf8> workDir,
+  Uint32 flags,
+  Pointer<Pointer<Uint8>> outPtr,
+  Pointer<UintPtr> outLen,
+  Pointer<Pointer<Uint8>> errPtr,
+  Pointer<UintPtr> errLen,
+);
+
+typedef _DxfToDwgDart = int Function(
+  Pointer<Uint8> input,
+  int inputLen,
+  Pointer<Utf8> workDir,
+  int flags,
+  Pointer<Pointer<Uint8>> outPtr,
+  Pointer<UintPtr> outLen,
+  Pointer<Pointer<Uint8>> errPtr,
+  Pointer<UintPtr> errLen,
+);
+
 typedef _FreeNative = Void Function(Pointer<Uint8> ptr, UintPtr len);
 typedef _FreeDart = void Function(Pointer<Uint8> ptr, int len);
 
@@ -52,6 +74,13 @@ class NativeCadLibrary {
   /// лежат в блоках без единого INSERT. Без фильтра такой DXF не помещается
   /// в память телефона.
   static const int flagFilterUnusedBlocks = 1;
+
+  /// Экспорт DWG: вырезать из промежуточного DXF секции CLASSES/OBJECTS
+  /// (AEC-объекты Civil 3D writer не умеет кодировать).
+  static const int flagDwgStripCustomObjects = 1;
+
+  /// Экспорт DWG: биты 1–2 — целевая версия (0 — 2018, 1 — 2013, 2 — 2007).
+  static const int flagDwgVersionShift = 1;
 
   static const String _windowsLibrary = 'menzulka_cad.dll';
   static const String _androidLibrary = 'libmenzulka_cad.so';
@@ -191,6 +220,87 @@ class NativeCadLibrary {
         throw CadConversionException(
           code == 0 ? 5 : code,
           errorMessage ?? 'не удалось сконвертировать DWG',
+        );
+      }
+      return result;
+    } finally {
+      malloc.free(inputPtr);
+      malloc.free(workDirPtr);
+      malloc.free(outPtr);
+      malloc.free(outLen);
+      malloc.free(errPtr);
+      malloc.free(errLen);
+    }
+  }
+
+  /// Конвертирует DXF-байты в DWG-байты (экспорт). Бросает [CadConversionException].
+  ///
+  /// [flags] — опции нативного слоя: `flagDwgStripCustomObjects` и биты версии
+  /// (`flagDwgVersionShift`).
+  static Uint8List dxfToDwg(
+    Uint8List dxf,
+    String workDir, {
+    int flags = 0,
+  }) {
+    final lib = _open();
+    if (lib == null) {
+      throw CadConversionException(
+        CadConversionException.codeUnavailable,
+        _loadError ?? 'нативный модуль DWG не найден',
+      );
+    }
+    final fn = lib.lookupFunction<_DxfToDwgNative, _DxfToDwgDart>(
+      'menzulka_dxf_to_dwg',
+    );
+    final free = lib.lookupFunction<_FreeNative, _FreeDart>('menzulka_free');
+
+    final inputPtr = malloc.allocate<Uint8>(dxf.length);
+    final workDirPtr = workDir.toNativeUtf8();
+    final outPtr = malloc<Pointer<Uint8>>();
+    final outLen = malloc<UintPtr>();
+    final errPtr = malloc<Pointer<Uint8>>();
+    final errLen = malloc<UintPtr>();
+    outPtr.value = nullptr;
+    errPtr.value = nullptr;
+    outLen.value = 0;
+    errLen.value = 0;
+
+    try {
+      inputPtr.asTypedList(dxf.length).setAll(0, dxf);
+      final code = fn(
+        inputPtr,
+        dxf.length,
+        workDirPtr,
+        flags,
+        outPtr,
+        outLen,
+        errPtr,
+        errLen,
+      );
+
+      final int outSize = outLen.value;
+      final int errSize = errLen.value;
+      final output = outPtr.value;
+      final error = errPtr.value;
+
+      String? errorMessage;
+      if (error != nullptr && errSize > 0) {
+        errorMessage =
+            utf8.decode(error.asTypedList(errSize), allowMalformed: true);
+      }
+
+      Uint8List? result;
+      if (code == 0 && output != nullptr && outSize > 0) {
+        result = Uint8List.fromList(output.asTypedList(outSize));
+      }
+
+      if (output != nullptr && outSize > 0) free(output, outSize);
+      if (error != nullptr && errSize > 0) free(error, errSize);
+
+      if (code != 0 || result == null) {
+        throw CadConversionException(
+          code == 0 ? 5 : code,
+          errorMessage ?? 'не удалось записать DWG',
         );
       }
       return result;

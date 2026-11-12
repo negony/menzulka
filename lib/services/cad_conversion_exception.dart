@@ -14,6 +14,12 @@ class CadConversionException implements Exception {
   /// Пользователь отменил ожидание (таймаут).
   static const int codeTimeout = 6;
 
+  /// Не удалось записать DWG.
+  static const int codeWriteFailed = 6;
+
+  /// Чертёж содержит объекты, которые нельзя записать в DWG.
+  static const int codeWriteUnsupported = 7;
+
   bool get isUnavailable => code == codeUnavailable;
 
   /// Файл новее поддерживаемого формата (новейший — R2018 / AC1032).
@@ -26,6 +32,12 @@ class CadConversionException implements Exception {
   bool get isEncrypted => code == 4;
 
   bool get isTimeout => code == codeTimeout;
+
+  /// Ошибка записи DWG (а не чтения).
+  bool get isWriteFailed => code == codeWriteFailed;
+
+  /// В чертеже есть объекты, которые нельзя записать в DWG.
+  bool get isWriteUnsupported => code == codeWriteUnsupported;
 
   @override
   String toString() => 'CadConversionException($code): $message';

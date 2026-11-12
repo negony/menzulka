@@ -13,6 +13,8 @@ import '../models/drawn_object.dart';
 import '../models/dxf_models.dart';
 import '../models/history_event.dart';
 import '../models/measurement.dart';
+import '../services/cad_converter.dart';
+import '../services/cad_export_version.dart';
 import '../services/database.dart';
 import '../services/dxf_parser.dart';
 import '../services/project_bundle.dart' show ExportPhotoQuality;
@@ -48,6 +50,9 @@ class DxfExportOptions {
   /// Качество фото в ZIP.
   final ExportPhotoQuality photoQuality;
 
+  /// Если задано — экспорт в DWG этой версии (иначе DXF).
+  final DwgExportVersion? dwgVersion;
+
   const DxfExportOptions({
     this.mode = DxfExportMode.geometry,
     this.includePoints = true,
@@ -55,6 +60,7 @@ class DxfExportOptions {
     this.visibleLayersOnly = false,
     this.hiddenDrawnLayers = const {},
     this.photoQuality = ExportPhotoQuality.compact,
+    this.dwgVersion,
   });
 
   DxfExportOptions copyWith({
@@ -64,6 +70,7 @@ class DxfExportOptions {
     bool? visibleLayersOnly,
     Set<String>? hiddenDrawnLayers,
     ExportPhotoQuality? photoQuality,
+    DwgExportVersion? dwgVersion,
   }) {
     return DxfExportOptions(
       mode: mode ?? this.mode,
@@ -72,6 +79,7 @@ class DxfExportOptions {
       visibleLayersOnly: visibleLayersOnly ?? this.visibleLayersOnly,
       hiddenDrawnLayers: hiddenDrawnLayers ?? this.hiddenDrawnLayers,
       photoQuality: photoQuality ?? this.photoQuality,
+      dwgVersion: dwgVersion ?? this.dwgVersion,
     );
   }
 }
@@ -702,9 +710,14 @@ class DxfExportService {
     if (drawing == null) throw StateError('Чертёж не найден');
     final Uint8List data;
     final String extension;
+    final bool isDwg = options.dwgVersion != null;
     if (options.mode == DxfExportMode.withPhotos) {
       data = await buildZipBytes(drawingId, options, onProgress: onProgress);
       extension = 'zip';
+    } else if (isDwg) {
+      final dxf = await buildDxfBytes(drawingId, options);
+      data = await CadConverter.dxfToDwg(dxf, version: options.dwgVersion!);
+      extension = 'dwg';
     } else {
       data = await buildDxfBytes(drawingId, options);
       extension = 'dxf';
@@ -721,12 +734,22 @@ class DxfExportService {
       counter++;
     }
     await File(target).writeAsBytes(data);
-    final summary = options.mode == DxfExportMode.withPhotos
-        ? 'DXF + фото (ZIP) экспортирован, ${formatBytes(data.length)}'
-        : 'DXF экспортирован, ${formatBytes(data.length)}';
+    final String summary;
+    final String eventType;
+    if (options.mode == DxfExportMode.withPhotos) {
+      summary = 'DXF + фото (ZIP) экспортирован, ${formatBytes(data.length)}';
+      eventType = HistoryEventType.dxfExported;
+    } else if (isDwg) {
+      summary = 'DWG ${options.dwgVersion!.label} экспортирован, '
+          '${formatBytes(data.length)}';
+      eventType = HistoryEventType.dwgExported;
+    } else {
+      summary = 'DXF экспортирован, ${formatBytes(data.length)}';
+      eventType = HistoryEventType.dxfExported;
+    }
     await _db.logEvent(
       drawingId: drawingId,
-      type: HistoryEventType.dxfExported,
+      type: eventType,
       summary: summary,
     );
     return target;

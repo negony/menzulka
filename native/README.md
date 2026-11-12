@@ -32,6 +32,7 @@ Android NDK; `cargo-ndk`.
 
 ```
 menzulka_dwg_to_dxf(in_ptr, in_len, workdir_ptr, flags, out_ptr, out_len, err_ptr, err_len) -> i32
+menzulka_dxf_to_dwg(in_ptr, in_len, workdir_ptr, flags, out_ptr, out_len, err_ptr, err_len) -> i32
 menzulka_free(ptr, len)
 menzulka_version() -> *const c_char   // "menzulka_cad X / acadrust Y"
 ```

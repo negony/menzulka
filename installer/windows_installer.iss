@@ -1,5 +1,5 @@
 #define AppName "Мензулка"
-#define AppVersion "1.17.0"
+#define AppVersion "1.18.0"
 #define AppExe "menzulka.exe"
 
 [Setup]

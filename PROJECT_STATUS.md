@@ -176,7 +176,8 @@ DWG — закрытый формат, поэтому путь выбран по
 Autodesk/ODA. MPL-2.0 — «файловый» copyleft: код приложения остаётся MIT.
 
 - `native/menzulka_cad` — cdylib с C ABI:
-  `menzulka_dwg_to_dxf(байты, каталог, flags, out/err)`, `menzulka_free`,
+  `menzulka_dwg_to_dxf(байты, каталог, flags, out/err)`,
+  `menzulka_dxf_to_dwg(байты, каталог, flags, out/err)`, `menzulka_free`,
   `menzulka_version`. Внутри — временные файлы в переданном каталоге,
   `DwgReader` → `DxfWriter`, `catch_unwind`; коды ошибок: 0 — ок, 1 — вход,
   2 — версия, 3 — повреждён, 4 — пароль, 5 — внутренняя.
@@ -196,7 +197,23 @@ Autodesk/ODA. MPL-2.0 — «файловый» copyleft: код приложен
 - Не распространяем: ODA File Converter/Autodesk (только ссылка как запасной
   ручной способ), LibreDWG (GPLv3).
 
-## 15. Известные ограничения
+## 15. Экспорт DWG
+
+- `menzulka_dxf_to_dwg` — DXF → DWG; целевые версии задаются флагами:
+  0 — AC1032 (R2018), 1 — AC1027 (R2013), 2 — AC1021 (R2007).
+- Перед чтением DXF можно вырезать секции `CLASSES`/`OBJECTS`
+  (`FLAG_DWG_STRIP_CUSTOM_OBJECTS`): там остаются объекты Civil 3D/AEC
+  (`AECC_*`, `AeccDb*`), которые writer не умеет кодировать из DXF-документа.
+- **Шаблон нового чертежа** — `assets/empty.dxf`, чистый DXF AutoCAD 2013
+  (AC1027, метры, без AEC). Ранее стоял шаблон Civil 3D с AEC-объектами: он
+  приводил к повреждённому DWG и диалогу AutoCAD «найдены ошибки».
+- Проверено в AutoCAD 2024 (детект диалога ошибок через перечисление окон):
+  DWG 2018/2013/2007 из чистого шаблона открываются штатно; остаётся только
+  стандартное предупреждение о DWG сторонней реализации (как у ODA).
+- Экспорт из приложения: `DxfExportOptions.dwgVersion` → `CadConverter.dxfToDwg`
+  (изолят, таймаут), файл `.dwg` в `exports/`, событие истории `dwg_exported`.
+
+## 16. Известные ограничения
 
 - Не поддерживаются: `HATCH`, `MLINE`, `MULTILEADER`, `IMAGE/WIPEOUT`,
   `ATTDEF/ATTRIB`, `REGION` (пропускаются).
@@ -206,7 +223,7 @@ Autodesk/ODA. MPL-2.0 — «файловый» copyleft: код приложен
 - DWG: не подгружаются XREF и часть объектов Civil 3D (прокси-графика — частично);
   защищённые паролем файлы требуют предварительной расшифровки.
 
-## 16. Полезные мелочи
+## 17. Полезные мелочи
 
 - Не копировать `build/`, `.dart_tool/`, `.idea/`, `windows/flutter/ephemeral/` —
   ломаются символические ссылки плагинов. После переноса проекта: `flutter clean`,

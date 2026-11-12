@@ -1,4 +1,4 @@
-//! Нативный слой «Мензулки»: конвертация DWG → DXF через `acadrust`.
+//! Нативный слой «Мензулки»: конвертация DWG → DXF и DXF → DWG через `acadrust`.
 //!
 //! Контракт C ABI:
 //! - `menzulka_dwg_to_dxf(in_ptr, in_len, workdir_ptr, flags, out_ptr, out_len, err_ptr, err_len) -> i32`
@@ -6,6 +6,7 @@
 //!   `out_*` и `err_*` — выходные буферы, которые вызывает освобождать
 //!   `menzulka_free(ptr, len)`.
 //!   `flags` — битовые опции (см. `FLAG_*`).
+//! - `menzulka_dxf_to_dwg(in_ptr, in_len, workdir_ptr, flags, out_ptr, out_len, err_ptr, err_len) -> i32` — запись DWG.
 //! - `menzulka_free(ptr, len)` — освобождение буфера, выделенного библиотекой.
 //! - `menzulka_version()` — статическая строка версии (UTF-8, NUL-терминированная).
 //!
@@ -19,7 +20,9 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use acadrust::{DwgReader, DxfError, DxfWriter};
+use acadrust::{
+    DwgReader, DwgWriter, DxfError, DxfReader, DxfReaderConfiguration, DxfVersion, DxfWriter,
+};
 
 /// Убрать из DXF геометрию блоков, на которые нет ни одной вставки (INSERT).
 ///
@@ -30,6 +33,49 @@ use acadrust::{DwgReader, DxfError, DxfWriter};
 /// остаются валидными).
 pub const FLAG_FILTER_UNUSED_BLOCKS: u32 = 1;
 
+/// При экспорте DWG: вырезать секции CLASSES и OBJECTS промежуточного DXF
+/// (там остаются AEC-объекты Civil 3D, которые writer не умеет кодировать).
+pub const FLAG_DWG_STRIP_CUSTOM_OBJECTS: u32 = 1;
+
+/// Биты 1–2 флагов экспорта DWG — целевая версия:
+/// 0 = AC1032 (R2018, по умолчанию), 1 = AC1027 (R2013), 2 = AC1021 (R2007).
+pub const FLAG_DWG_VERSION_MASK: u32 = 0b11 << 1;
+pub const FLAG_DWG_VERSION_SHIFT: u32 = 1;
+
+/// Версия DWG для экспорта.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DwgTargetVersion {
+    R2018,
+    R2013,
+    R2007,
+}
+
+impl DwgTargetVersion {
+    pub fn from_flags(flags: u32) -> Self {
+        match (flags & FLAG_DWG_VERSION_MASK) >> FLAG_DWG_VERSION_SHIFT {
+            1 => DwgTargetVersion::R2013,
+            2 => DwgTargetVersion::R2007,
+            _ => DwgTargetVersion::R2018,
+        }
+    }
+
+    pub fn dxf_version(self) -> DxfVersion {
+        match self {
+            DwgTargetVersion::R2018 => DxfVersion::AC1032,
+            DwgTargetVersion::R2013 => DxfVersion::AC1027,
+            DwgTargetVersion::R2007 => DxfVersion::AC1021,
+        }
+    }
+
+    pub fn code(self) -> &'static str {
+        match self {
+            DwgTargetVersion::R2018 => "AC1032",
+            DwgTargetVersion::R2013 => "AC1027",
+            DwgTargetVersion::R2007 => "AC1021",
+        }
+    }
+}
+
 /// Коды ошибок, которые понимает Dart-обвязка.
 #[repr(i32)]
 pub enum ErrorCode {
@@ -39,6 +85,10 @@ pub enum ErrorCode {
     CorruptFile = 3,
     Encrypted = 4,
     Internal = 5,
+    /// Не удалось записать DWG (writer не смог закодировать данные).
+    WriteFailed = 6,
+    /// Чертёж содержит объекты, которые нельзя записать в DWG.
+    WriteUnsupported = 7,
 }
 
 fn set_error(err_out: &mut Option<String>, message: impl Into<String>) {
@@ -429,6 +479,260 @@ pub extern "C" fn menzulka_version() -> *const c_char {
         })
         .as_ptr()
 }
+
+// ---------- экспорт DWG ----------
+
+/// Вырезает из DXF целые секции (`CLASSES`, `OBJECTS`).
+///
+/// Секции содержат объекты Civil 3D/AEC (`AECC_*`, `AeccDb*`), которые
+/// DWG-writer не умеет кодировать из DXF-документа: он требует «сырые» байты
+/// исходного DWG. Такие объекты для экспорта не нужны — чертёж сохраняется.
+fn strip_dxf_sections(input: &Path, output: &Path, names: &[&str]) -> std::io::Result<()> {
+    let reader = BufReader::with_capacity(1 << 20, File::open(input)?);
+    let mut lines = reader.lines();
+    let mut writer = BufWriter::with_capacity(1 << 20, File::create(output)?);
+
+    // None — вне секции; Some("") — секция открыта, имя ещё не прочитано.
+    let mut section: Option<String> = None;
+    let mut skip = false;
+    let mut pending: Vec<(String, String)> = Vec::new();
+
+    loop {
+        let code = match lines.next() {
+            Some(Ok(value)) => value,
+            _ => break,
+        };
+        let value = match lines.next() {
+            Some(Ok(value)) => value,
+            _ => break,
+        };
+        let code_trim = code.trim();
+
+        if code_trim == "0" {
+            match value.trim() {
+                "SECTION" => {
+                    section = Some(String::new());
+                    skip = false;
+                    pending.clear();
+                    pending.push((code, value));
+                    continue;
+                }
+                "ENDSEC" => {
+                    let skipping = skip;
+                    section = None;
+                    skip = false;
+                    pending.clear();
+                    if skipping {
+                        continue;
+                    }
+                    writeln!(writer, "{code}\n{value}")?;
+                    continue;
+                }
+                _ => {}
+            }
+            if !skip {
+                writeln!(writer, "{code}\n{value}")?;
+            }
+            continue;
+        }
+
+        if code_trim == "2" && section.as_deref() == Some("") {
+            let name = value.trim().to_string();
+            skip = names.contains(&name.as_str());
+            section = Some(name);
+            if !skip {
+                for (pending_code, pending_value) in pending.drain(..) {
+                    writeln!(writer, "{pending_code}\n{pending_value}")?;
+                }
+                writeln!(writer, "{code}\n{value}")?;
+            } else {
+                pending.clear();
+            }
+            continue;
+        }
+
+        if skip {
+            continue;
+        }
+        if section.as_deref() == Some("") {
+            pending.push((code, value));
+            continue;
+        }
+        writeln!(writer, "{code}\n{value}")?;
+    }
+    writer.flush()
+}
+
+/// Ошибки DWG-writer'а: отделяем «не умею кодировать» от прочих.
+fn classify_write(error: &DxfError) -> (i32, String) {
+    let text = error.to_string();
+    let lowered = text.to_lowercase();
+    let code = if lowered.contains("raw dwg data is required")
+        || lowered.contains("cannot encode")
+        || lowered.contains("not implemented")
+        || lowered.contains("unsupported")
+    {
+        ErrorCode::WriteUnsupported as i32
+    } else {
+        ErrorCode::WriteFailed as i32
+    };
+    (code, text)
+}
+
+/// Конвертирует DXF-байты в DWG-байты (AC1032/R2018 или AC1027/R2013).
+///
+/// `flags`: `FLAG_DWG_STRIP_CUSTOM_OBJECTS` — вырезать CLASSES/OBJECTS перед
+/// чтением, `FLAG_DWG_TARGET_2013` — писать R2013.
+pub fn convert_dxf_to_dwg(
+    dxf: &[u8],
+    work_dir: &Path,
+    flags: u32,
+) -> Result<Vec<u8>, (i32, String)> {
+    // Грубая проверка, что это DXF: у настоящего файла есть секция ENTITIES.
+    // Иначе failsafe-читатель пропускает мусор и получается пустой DWG.
+    if !dxf.windows(8).any(|window| window == b"ENTITIES") {
+        return Err((
+            ErrorCode::BadInput as i32,
+            "файл не похож на DXF (нет секции ENTITIES)".to_string(),
+        ));
+    }
+    let input_path = work_dir.join("export_input.dxf");
+    std::fs::write(&input_path, dxf)
+        .map_err(|e| (ErrorCode::BadInput as i32, format!("не удалось записать DXF: {e}")))?;
+
+    let source_path = if flags & FLAG_DWG_STRIP_CUSTOM_OBJECTS != 0 {
+        let cleaned = work_dir.join("export_clean.dxf");
+        strip_dxf_sections(&input_path, &cleaned, &["CLASSES", "OBJECTS"]).map_err(|e| {
+            (
+                ErrorCode::Internal as i32,
+                format!("не удалось очистить DXF: {e}"),
+            )
+        })?;
+        cleaned
+    } else {
+        input_path
+    };
+
+    let config = DxfReaderConfiguration {
+        failsafe: true,
+        ..Default::default()
+    };
+    let mut document = DxfReader::from_file(&source_path)
+        .map_err(|e| (ErrorCode::BadInput as i32, format!("не удалось прочитать DXF: {e}")))?
+        .with_configuration(config)
+        .read()
+        .map_err(|e| classify(&e))?;
+
+    document.version = DwgTargetVersion::from_flags(flags).dxf_version();
+
+    let output_path = work_dir.join("export_output.dwg");
+    DwgWriter::write_to_file(&output_path, &document).map_err(|e| classify_write(&e))?;
+    std::fs::read(&output_path)
+        .map_err(|e| (ErrorCode::WriteFailed as i32, format!("не удалось прочитать DWG: {e}")))
+}
+
+/// Экспорт: DXF-байты → DWG-байты.
+///
+/// # Safety
+/// Все указатели должны быть валидны; `workdir` — NUL-терминированная UTF-8 строка.
+#[no_mangle]
+pub unsafe extern "C" fn menzulka_dxf_to_dwg(
+    input_ptr: *const u8,
+    input_len: usize,
+    workdir_ptr: *const c_char,
+    flags: u32,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+    err_ptr: *mut *mut u8,
+    err_len: *mut usize,
+) -> i32 {
+    let mut output: Option<Vec<u8>> = None;
+    let mut error: Option<String> = None;
+
+    let result = catch_unwind(AssertUnwindSafe(|| -> i32 {
+        if input_ptr.is_null() || workdir_ptr.is_null() || out_ptr.is_null() || out_len.is_null() {
+            set_error(&mut error, "переданы нулевые указатели");
+            return ErrorCode::BadInput as i32;
+        }
+        if input_len == 0 || input_len > 512 * 1024 * 1024 {
+            set_error(&mut error, "недопустимый размер входного файла");
+            return ErrorCode::BadInput as i32;
+        }
+        let input = std::slice::from_raw_parts(input_ptr, input_len);
+        let workdir = match CStr::from_ptr(workdir_ptr).to_str() {
+            Ok(value) => value.to_string(),
+            Err(_) => {
+                set_error(&mut error, "каталог для временных файлов не в UTF-8");
+                return ErrorCode::BadInput as i32;
+            }
+        };
+        let base = PathBuf::from(workdir);
+        if !base.is_dir() {
+            set_error(&mut error, format!("каталог не найден: {}", base.display()));
+            return ErrorCode::BadInput as i32;
+        }
+        let dir = match unique_work_dir(&base) {
+            Ok(dir) => dir,
+            Err(e) => {
+                set_error(&mut error, format!("не удалось создать рабочий каталог: {e}"));
+                return ErrorCode::BadInput as i32;
+            }
+        };
+        let outcome = convert_dxf_to_dwg(input, &dir, flags);
+        let _ = std::fs::remove_dir_all(&dir);
+        match outcome {
+            Ok(bytes) => {
+                output = Some(bytes);
+                ErrorCode::Ok as i32
+            }
+            Err((code, message)) => {
+                set_error(&mut error, message);
+                code
+            }
+        }
+    }));
+
+    let code = match result {
+        Ok(code) => code,
+        Err(_) => {
+            error = Some("внутренняя ошибка библиотеки (паника)".to_string());
+            ErrorCode::Internal as i32
+        }
+    };
+
+    if !out_ptr.is_null() && !out_len.is_null() {
+        match output {
+            Some(bytes) => {
+                let boxed = bytes.into_boxed_slice();
+                let len = boxed.len();
+                let raw = Box::into_raw(boxed) as *mut u8;
+                *out_ptr = raw;
+                *out_len = len;
+            }
+            None => {
+                *out_ptr = std::ptr::null_mut();
+                *out_len = 0;
+            }
+        }
+    }
+    if !err_ptr.is_null() && !err_len.is_null() {
+        match error {
+            Some(message) => {
+                let bytes = message.into_bytes().into_boxed_slice();
+                let len = bytes.len();
+                let raw = Box::into_raw(bytes) as *mut u8;
+                *err_ptr = raw;
+                *err_len = len;
+            }
+            None => {
+                *err_ptr = std::ptr::null_mut();
+                *err_len = 0;
+            }
+        }
+    }
+    code
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -471,6 +775,54 @@ mod tests {
         // Структура файла цела.
         assert!(out.contains("ENDBLK"));
         assert!(out.contains("ENTITIES"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_dwg_three_versions() {
+        let dir = std::env::temp_dir().join("menzulka_cad_export_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dxf = concat!(
+            "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1027\n0\nENDSEC\n",
+            "0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLAYER\n70\n1\n",
+            "0\nLAYER\n2\n0\n70\n0\n62\n7\n6\nCONTINUOUS\n0\nENDTAB\n0\nENDSEC\n",
+            "0\nSECTION\n2\nENTITIES\n",
+            "0\nLINE\n8\n0\n10\n0\n20\n0\n11\n10\n21\n5\n",
+            "0\nENDSEC\n0\nEOF\n"
+        );
+        for (flags, expected) in
+            [(0u32, "AC1032"), (1u32 << 1, "AC1027"), (2u32 << 1, "AC1021")]
+        {
+            let dwg = convert_dxf_to_dwg(dxf.as_bytes(), &dir, flags)
+                .unwrap_or_else(|(code, msg)| panic!("версия {expected}: код {code}: {msg}"));
+            assert!(dwg.len() > 200, "слишком маленький DWG для {expected}");
+            assert_eq!(&dwg[..6], expected.as_bytes());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn strip_sections_removes_classes_and_objects() {
+        let dir = std::env::temp_dir().join("menzulka_cad_strip_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("in.dxf");
+        let output = dir.join("out.dxf");
+        let dxf = concat!(
+            "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1032\n0\nENDSEC\n",
+            "0\nSECTION\n2\nCLASSES\n0\nCLASS\n1\nAECC_TREE_NODE\n0\nENDSEC\n",
+            "0\nSECTION\n2\nOBJECTS\n0\nDICTIONARY\n5\n1\n0\nENDSEC\n",
+            "0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n1\n21\n1\n0\nENDSEC\n0\nEOF\n"
+        );
+        std::fs::write(&input, dxf).unwrap();
+        strip_dxf_sections(&input, &output, &["CLASSES", "OBJECTS"]).unwrap();
+        let out = std::fs::read_to_string(&output).unwrap();
+        assert!(!out.contains("AECC_TREE_NODE"));
+        assert!(!out.contains("DICTIONARY"));
+        assert!(out.contains("ENTITIES"));
+        assert!(out.contains("HEADER"));
+        assert!(out.contains("EOF"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

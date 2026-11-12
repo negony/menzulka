@@ -13,6 +13,7 @@ class HistoryEventType {
   static const projectExported = 'project_exported';
   static const projectImported = 'project_imported';
   static const dxfExported = 'dxf_exported';
+  static const dwgExported = 'dwg_exported';
   static const versionCreated = 'version_created';
   static const versionRestored = 'version_restored';
 }
@@ -40,6 +41,8 @@ const Map<HistoryCategory, List<String>> historyCategoryTypes = {
     HistoryEventType.measurementDeleted,
   ],
   HistoryCategory.system: [
+    HistoryEventType.dxfExported,
+    HistoryEventType.dwgExported,
     HistoryEventType.projectExported,
     HistoryEventType.projectImported,
     HistoryEventType.versionCreated,

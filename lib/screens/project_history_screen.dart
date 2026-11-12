@@ -436,6 +436,8 @@ class _ProjectHistoryScreenState extends State<ProjectHistoryScreen> {
         return Icons.download;
       case HistoryEventType.dxfExported:
         return Icons.file_download;
+      case HistoryEventType.dwgExported:
+        return Icons.save_alt;
       case HistoryEventType.versionCreated:
         return Icons.bookmark_add;
       case HistoryEventType.versionRestored:

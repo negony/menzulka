@@ -16,6 +16,7 @@ import '../models/dxf_models.dart';
 import '../models/measurement.dart';
 import '../models/snap_models.dart';
 import '../services/cad_conversion_exception.dart';
+import '../services/cad_export_version.dart';
 import '../services/cad_converter.dart';
 import '../services/cad_format.dart';
 import '../services/database.dart';
@@ -586,7 +587,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
     }
   }
 
-  /// Экспорт в DXF (или DXF + фото ZIP) из меню «⋮».
+  /// Экспорт чертежа: DXF, DWG (2018/2013/2007) или DXF + фото (ZIP).
   Future<void> _exportDxf() async {
     final id = _drawingId;
     if (id == null) return;
@@ -598,6 +599,8 @@ class _DrawingScreenState extends State<DrawingScreen> {
     );
     if (options == null || !mounted) return;
     final service = DxfExportService();
+    final dwgVersion = options.dwgVersion;
+
     if (options.mode == DxfExportMode.withPhotos) {
       final notifier = ValueNotifier<int>(0);
       final navigator = Navigator.of(context, rootNavigator: true);
@@ -632,7 +635,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
           onProgress: (done, total) => notifier.value = done,
         );
         navigator.pop();
-        await _presentDxfFile(path);
+        await _presentDxfFile(path, zip: true);
       } catch (e) {
         navigator.pop();
         if (mounted) {
@@ -644,11 +647,54 @@ class _DrawingScreenState extends State<DrawingScreen> {
           );
         }
       }
-    } else {
+      return;
+    }
+
+    if (dwgVersion != null) {
+      // Запись DWG — в нативном модуле (изолят), показываем прогресс.
+      final navigator = Navigator.of(context, rootNavigator: true);
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => PopScope(
+          canPop: false,
+          child: AlertDialog(
+            title: Text('Экспорт в DWG ${dwgVersion.label}'),
+            content: const Row(
+              children: [
+                SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 3),
+                ),
+                SizedBox(width: 16),
+                Expanded(child: Text('Сохраняем DWG…')),
+              ],
+            ),
+          ),
+        ),
+      );
       try {
         final path = await service.exportToFile(id, options);
-        await _presentDxfFile(path, zip: true);
+        navigator.pop();
+        await _presentDxfFile(path, dwg: dwgVersion);
+      } on CadConversionException catch (e) {
+        navigator.pop();
+        if (mounted) {
+          final message = e.isWriteUnsupported
+              ? 'В чертеже есть объекты, которые нельзя записать в DWG. '
+                  'Экспортируйте его в DXF.'
+              : 'Не удалось записать DWG: ${e.message}';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(message),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 8),
+            ),
+          );
+        }
       } catch (e) {
+        navigator.pop();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -658,20 +704,36 @@ class _DrawingScreenState extends State<DrawingScreen> {
           );
         }
       }
+      return;
+    }
+
+    try {
+      final path = await service.exportToFile(id, options);
+      await _presentDxfFile(path);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Ошибка экспорта: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
   /// Показывает результат экспорта. На телефоне не «выкидывает» сразу
   /// в share-sheet: пользователь сам решает — «Поделиться» или «Готово»
   /// (экран остаётся в приложении).
-  Future<void> _presentDxfFile(String path, {bool zip = false}) async {
+  Future<void> _presentDxfFile(String path,
+      {bool zip = false, DwgExportVersion? dwg}) async {
     final isMobile = Platform.isAndroid || Platform.isIOS;
     if (isMobile) {
       if (!mounted) return;
       final share = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Экспорт готов'),
+          title: Text(dwg == null ? 'Экспорт готов' : 'DWG готов'),
           content: Text(
             '${p.basename(path)}\n\n'
             'Файл сохранён в экспорт приложения. Чтобы отправить его '
@@ -695,7 +757,9 @@ class _DrawingScreenState extends State<DrawingScreen> {
       // и Telegram показывает файл картинкой (IMG_…jpg).
       await shareOrSaveFile(
         path,
-        text: zip ? 'DXF + фото (ZIP)' : 'DXF чертежа',
+        text: zip
+            ? 'DXF + фото (ZIP)'
+            : (dwg == null ? 'DXF чертежа' : 'DWG ${dwg.label} чертежа'),
         mimeType: zip ? 'application/zip' : 'application/octet-stream',
       );
       if (mounted) {
@@ -707,7 +771,9 @@ class _DrawingScreenState extends State<DrawingScreen> {
     }
     final saved = await shareOrSaveFile(
       path,
-      text: zip ? 'DXF + фото (ZIP)' : 'DXF чертежа',
+      text: zip
+          ? 'DXF + фото (ZIP)'
+          : (dwg == null ? 'DXF чертежа' : 'DWG ${dwg.label} чертежа'),
       mimeType: zip ? 'application/zip' : 'application/octet-stream',
     );
     if (saved != null && mounted) {
@@ -1238,14 +1304,29 @@ class _DxfExportDialog extends StatefulWidget {
 
 class _DxfExportDialogState extends State<_DxfExportDialog> {
   late DxfExportMode _mode = widget.initial.mode;
+  late DwgExportVersion? _dwgVersion = widget.initial.dwgVersion;
   late bool _includePoints = widget.initial.includePoints;
   late bool _includeMeasurements = widget.initial.includeMeasurements;
   late bool _visibleLayersOnly = widget.initial.visibleLayersOnly;
 
+  bool get _isDwg => _dwgVersion != null;
+  bool get _isZip => _mode == DxfExportMode.withPhotos && !_isDwg;
+
+  DxfExportOptions _result() => DxfExportOptions(
+        mode: _isZip ? DxfExportMode.withPhotos : DxfExportMode.geometry,
+        includePoints: _includePoints,
+        includeMeasurements: _includeMeasurements,
+        visibleLayersOnly: _visibleLayersOnly,
+        hiddenDrawnLayers: widget.initial.hiddenDrawnLayers,
+        photoQuality: widget.initial.photoQuality,
+        dwgVersion: _dwgVersion,
+      );
+
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return AlertDialog(
-      title: const Text('Экспорт в DXF'),
+      title: const Text('Экспорт чертежа'),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1253,16 +1334,51 @@ class _DxfExportDialogState extends State<_DxfExportDialog> {
           children: [
             _modeTile(
               key: const Key('dxf-export-mode-geometry'),
-              mode: DxfExportMode.geometry,
+              selected: _mode == DxfExportMode.geometry && !_isDwg,
               title: 'DXF (геометрия)',
               subtitle:
                   'Все исходные примитивы + нарисованные объекты по слоям',
+              onTap: () => setState(() {
+                _mode = DxfExportMode.geometry;
+                _dwgVersion = null;
+              }),
             ),
             _modeTile(
+              key: const Key('dxf-export-mode-dwg'),
+              selected: _isDwg,
+              title: 'DWG (AutoCAD)',
+              subtitle: 'Тот же чертёж, записанный в формате DWG',
+              onTap: () => setState(() {
+                _mode = DxfExportMode.geometry;
+                _dwgVersion ??= DwgExportVersion.r2018;
+              }),
+            ),
+            if (_isDwg)
+              Padding(
+                padding: const EdgeInsets.only(left: 32, bottom: 4),
+                child: Wrap(
+                  spacing: 8,
+                  children: [
+                    for (final version in DwgExportVersion.values)
+                      ChoiceChip(
+                        key: Key('dwg-version-${version.label}'),
+                        label: Text(version.label),
+                        selected: _dwgVersion == version,
+                        onSelected: (_) =>
+                            setState(() => _dwgVersion = version),
+                      ),
+                  ],
+                ),
+              ),
+            _modeTile(
               key: const Key('dxf-export-mode-photos'),
-              mode: DxfExportMode.withPhotos,
+              selected: _isZip,
               title: 'DXF + фото (ZIP)',
               subtitle: 'Тот же DXF + фотографии точек, points.csv и README',
+              onTap: () => setState(() {
+                _mode = DxfExportMode.withPhotos;
+                _dwgVersion = null;
+              }),
             ),
             const Divider(height: 16),
             CheckboxListTile(
@@ -1296,6 +1412,16 @@ class _DxfExportDialogState extends State<_DxfExportDialog> {
               value: _visibleLayersOnly,
               onChanged: (v) => setState(() => _visibleLayersOnly = v ?? false),
             ),
+            if (_isDwg) ...[
+              const Divider(height: 16),
+              Text(
+                'DWG ${_dwgVersion!.label}: открывается в AutoCAD '
+                '${_dwgVersion!.label}+. Объекты Civil 3D (поверхности, '
+                'трубопроводы) в DWG не переносятся — для них используйте DXF.',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              ),
+            ],
           ],
         ),
       ),
@@ -1306,15 +1432,7 @@ class _DxfExportDialogState extends State<_DxfExportDialog> {
         ),
         FilledButton(
           key: const Key('dxf-export-submit'),
-          onPressed: () => Navigator.pop(
-            context,
-            widget.initial.copyWith(
-              mode: _mode,
-              includePoints: _includePoints,
-              includeMeasurements: _includeMeasurements,
-              visibleLayersOnly: _visibleLayersOnly,
-            ),
-          ),
+          onPressed: () => Navigator.pop(context, _result()),
           child: const Text('Экспортировать'),
         ),
       ],
@@ -1323,11 +1441,11 @@ class _DxfExportDialogState extends State<_DxfExportDialog> {
 
   Widget _modeTile({
     required Key key,
-    required DxfExportMode mode,
+    required bool selected,
     required String title,
     required String subtitle,
+    required VoidCallback onTap,
   }) {
-    final selected = _mode == mode;
     return ListTile(
       key: key,
       contentPadding: EdgeInsets.zero,
@@ -1338,7 +1456,7 @@ class _DxfExportDialogState extends State<_DxfExportDialog> {
       ),
       title: Text(title),
       subtitle: Text(subtitle),
-      onTap: () => setState(() => _mode = mode),
+      onTap: onTap,
     );
   }
 }

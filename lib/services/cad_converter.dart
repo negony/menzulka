@@ -8,7 +8,34 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'cad_conversion_exception.dart';
+import 'cad_export_version.dart';
 import 'native_cad_bindings.dart';
+
+/// Задача изолята для экспорта DWG.
+class _DwgExportTask {
+  const _DwgExportTask(this.dxf, this.workDir, this.reply, this.version);
+
+  final Uint8List dxf;
+  final String workDir;
+  final SendPort reply;
+  final DwgExportVersion version;
+}
+
+/// Точка входа изолята: DXF → DWG.
+void _exportDwgInIsolate(_DwgExportTask task) {
+  try {
+    final dwg = NativeCadLibrary.dxfToDwg(
+      task.dxf,
+      task.workDir,
+      flags: (task.version.flagBits << NativeCadLibrary.flagDwgVersionShift),
+    );
+    task.reply.send(<Object?>['ok', dwg]);
+  } on CadConversionException catch (e) {
+    task.reply.send(<Object?>['err', e.code, e.message]);
+  } on Object catch (e) {
+    task.reply.send(<Object?>['err', 6, e.toString()]);
+  }
+}
 
 class _IsolateTask {
   const _IsolateTask(
@@ -128,6 +155,96 @@ class CadConverter {
       reply.close();
       isolate.kill(priority: Isolate.immediate);
     }
+  }
+
+  /// Экспорт: DXF-байты → DWG-байты. Бросает [CadConversionException].
+  ///
+  /// [version] — целевая версия DWG (2018 / 2013 / 2007).
+  static Future<Uint8List> dxfToDwg(
+    Uint8List dxf, {
+    String? workDir,
+    DwgExportVersion version = DwgExportVersion.r2018,
+  }) async {
+    if (!isAvailable) {
+      throw const CadConversionException(
+        CadConversionException.codeUnavailable,
+        'нативный модуль DWG не найден',
+      );
+    }
+    final cacheDir = workDir ?? (await getTemporaryDirectory()).path;
+    final reply = ReceivePort();
+    final completer = Completer<Uint8List>();
+    Isolate? isolate;
+    Timer? timer;
+
+    void finishError(CadConversionException error) {
+      if (completer.isCompleted) return;
+      completer.completeError(error);
+    }
+
+    reply.listen((message) {
+      if (completer.isCompleted) return;
+      if (message is List && message.isNotEmpty) {
+        if (message[0] == 'ok' && message.length >= 2) {
+          completer.complete(Uint8List.fromList(message[1] as Uint8List));
+          return;
+        }
+        if (message[0] == 'err' && message.length >= 3) {
+          finishError(
+            CadConversionException(message[1] as int, message[2] as String),
+          );
+          return;
+        }
+      }
+      finishError(
+        const CadConversionException(
+            CadConversionException.codeWriteFailed, 'некорректный ответ'),
+      );
+    });
+
+    try {
+      isolate = await Isolate.spawn(
+        _exportDwgInIsolate,
+        _DwgExportTask(dxf, cacheDir, reply.sendPort, version),
+        debugName: 'dxf_to_dwg',
+      );
+    } on Object catch (e) {
+      reply.close();
+      throw CadConversionException(CadConversionException.codeWriteFailed,
+          'не удалось запустить изолят: $e');
+    }
+
+    timer = Timer(timeout, () {
+      isolate?.kill(priority: Isolate.immediate);
+      finishError(
+        const CadConversionException(
+          CadConversionException.codeTimeout,
+          'превышено время записи DWG',
+        ),
+      );
+    });
+
+    try {
+      return await completer.future;
+    } finally {
+      timer.cancel();
+      reply.close();
+      isolate.kill(priority: Isolate.immediate);
+    }
+  }
+
+  /// Для тестов: DXF → DWG синхронно.
+  @visibleForTesting
+  static Uint8List dxfToDwgSync(
+    Uint8List dxf, {
+    required String workDir,
+    DwgExportVersion version = DwgExportVersion.r2018,
+  }) {
+    return NativeCadLibrary.dxfToDwg(
+      dxf,
+      workDir,
+      flags: version.flagBits << NativeCadLibrary.flagDwgVersionShift,
+    );
   }
 
   /// Для тестов: конвертировать синхронно (в текущем изоляте, без таймаута).
