@@ -89,3 +89,8 @@ desktop.ini
 /native/target/
 native/windows/*.dll
 /android/app/src/main/jniLibs/
+/d*.xml
+/e*.xml
+/m*.xml
+/r*.xml
+/sh*.xml

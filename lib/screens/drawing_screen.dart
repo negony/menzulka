@@ -1128,7 +1128,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
               PopupMenuItem(
                 value: 'exportDxf',
                 enabled: _drawingId != null,
-                child: const Text('Экспорт в DXF…'),
+                child: const Text('Экспорт…'),
               ),
               PopupMenuItem(
                 value: 'history',
