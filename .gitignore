@@ -84,3 +84,8 @@ desktop.ini
 
 # Временные файлы Word/Office
 ~$*
+
+# Нативный слой DWG (собирается tool/build_native.ps1)
+/native/target/
+native/windows/*.dll
+/android/app/src/main/jniLibs/

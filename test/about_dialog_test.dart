@@ -33,7 +33,28 @@ void main() {
     expect(find.textContaining('сборка 48'), findsOneWidget);
     expect(find.byKey(const Key('about-github-url')), findsOneWidget);
     expect(find.text(AppInfo.githubUrl), findsOneWidget);
+    expect(find.byKey(const Key('about-native-version')), findsOneWidget);
+    expect(find.byKey(const Key('about-licenses')), findsOneWidget);
     expect(find.byKey(const Key('about-close')), findsOneWidget);
+  });
+
+  testWidgets('пункт «Лицензии компонентов» открывает список лицензий',
+      (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(body: AboutAppDialog(infoLoader: fakeInfo)),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('about-licenses')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('licenses-dialog')), findsOneWidget);
+    expect(find.textContaining('acadrust'), findsWidgets);
+    expect(find.textContaining('MPL-2.0'), findsWidgets);
+
+    await tester.tap(find.byKey(const Key('licenses-close')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('licenses-dialog')), findsNothing);
   });
 
   testWidgets('кнопка «Закрыть» закрывает окно', (tester) async {

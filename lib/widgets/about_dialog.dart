@@ -4,6 +4,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../app_info.dart';
+import '../services/cad_converter.dart';
 
 /// Окно «О программе»: название, версия сборки и ссылка на исходный код.
 class AboutAppDialog extends StatefulWidget {
@@ -36,6 +37,40 @@ class _AboutAppDialogState extends State<AboutAppDialog> {
         const SnackBar(content: Text('Ссылка скопирована в буфер обмена')),
       );
     }
+  }
+
+  /// Показывает список сторонних компонентов и их лицензий.
+  Future<void> _showLicenses(BuildContext context) async {
+    String text;
+    try {
+      text = await rootBundle.loadString('THIRD_PARTY_NOTICES.md');
+    } catch (_) {
+      text = 'Не удалось загрузить список лицензий.';
+    }
+    if (!context.mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        key: const Key('licenses-dialog'),
+        title: const Text('Лицензии компонентов'),
+        content: SizedBox(
+          width: 520,
+          child: SingleChildScrollView(
+            child: SelectableText(
+              text,
+              style: const TextStyle(fontSize: 12, height: 1.35),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            key: const Key('licenses-close'),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Закрыть'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -90,6 +125,17 @@ class _AboutAppDialogState extends State<AboutAppDialog> {
               textAlign: TextAlign.center,
               style: theme.textTheme.bodySmall,
             ),
+            const SizedBox(height: 12),
+            Text(
+              CadConverter.isAvailable
+                  ? 'Модуль DWG: ${CadConverter.nativeVersion ?? '—'}'
+                  : 'Модуль DWG: не установлен',
+              key: const Key('about-native-version'),
+              textAlign: TextAlign.center,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
             const SizedBox(height: 16),
             const Divider(height: 1),
             const SizedBox(height: 8),
@@ -119,6 +165,16 @@ class _AboutAppDialogState extends State<AboutAppDialog> {
                   );
                 },
               ),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              key: const Key('about-licenses'),
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.description_outlined),
+              title: const Text('Лицензии компонентов'),
+              subtitle: const Text('MIT, MPL-2.0 (acadrust) и другие'),
+              trailing: const Icon(Icons.chevron_right, size: 18),
+              onTap: () => _showLicenses(context),
             ),
           ],
         ),

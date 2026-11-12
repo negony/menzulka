@@ -15,6 +15,9 @@ import '../models/drawn_object.dart';
 import '../models/dxf_models.dart';
 import '../models/measurement.dart';
 import '../models/snap_models.dart';
+import '../services/cad_conversion_exception.dart';
+import '../services/cad_converter.dart';
+import '../services/cad_format.dart';
 import '../services/database.dart';
 import '../services/dxf_parser.dart';
 import '../services/file_share.dart';
@@ -22,6 +25,7 @@ import '../services/project_bundle.dart';
 import '../services/project_version_service.dart';
 import '../utils/empty_dxf.dart';
 import '../widgets/about_dialog.dart';
+import '../widgets/cad_error_dialog.dart';
 import '../widgets/drawing_toolbar.dart';
 import '../widgets/dxf_viewer.dart';
 import '../widgets/layers_sheet.dart';
@@ -59,6 +63,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
   String? _currentFileName;
   String? _drawingId;
   bool _isLoading = false;
+  String _loadingMessage = 'Загрузка и парсинг DXF...';
   int _viewerEpoch = 0;
   List<({String id, String name, String path, String units})> _recent = [];
 
@@ -254,14 +259,23 @@ class _DrawingScreenState extends State<DrawingScreen> {
 
   Future<void> _pickAndLoadDxf() async {
     try {
-      if (mounted) setState(() => _isLoading = true);
+      if (mounted) {
+        setState(() {
+          _isLoading = true;
+          _loadingMessage = 'Открываем файл…';
+        });
+      }
 
       const typeGroup = XTypeGroup(
-        label: 'DXF files',
-        extensions: ['dxf'],
+        label: 'Чертежи DXF/DWG',
+        extensions: ['dxf', 'dwg'],
         mimeTypes: [
           'application/dxf',
           'application/x-dxf',
+          'application/acad',
+          'application/x-acad',
+          'image/vnd.dwg',
+          'application/dwg',
           'text/plain',
           '*/*'
         ],
@@ -273,7 +287,51 @@ class _DrawingScreenState extends State<DrawingScreen> {
         return;
       }
 
-      final bytes = await file.readAsBytes();
+      var bytes = await file.readAsBytes();
+
+      // DWG — бинарный формат: сначала конвертируем в DXF нативным модулем.
+      if (CadFormatDetector.detect(bytes) == CadFormat.dwg) {
+        if (!CadFormatDetector.isKnownDwgVersion(bytes)) {
+          if (mounted) setState(() => _isLoading = false);
+          if (mounted) {
+            await CadErrorDialog.show(
+              context,
+              const CadConversionException(
+                2,
+                'версия DWG новее поддерживаемой (до R2018 / AC1032)',
+              ),
+              fileName: file.name,
+            );
+          }
+          return;
+        }
+        if (!CadConverter.isSupported) {
+          if (mounted) setState(() => _isLoading = false);
+          if (mounted) {
+            await CadErrorDialog.show(
+              context,
+              const CadConversionException(
+                CadConversionException.codeUnavailable,
+                'нативный модуль DWG недоступен на этой платформе',
+              ),
+              fileName: file.name,
+            );
+          }
+          return;
+        }
+        if (mounted) setState(() => _loadingMessage = 'Читаем DWG…');
+        try {
+          bytes = await CadConverter.dwgToDxf(bytes);
+        } on CadConversionException catch (error) {
+          if (mounted) setState(() => _isLoading = false);
+          if (mounted) {
+            await CadErrorDialog.show(context, error, fileName: file.name);
+          }
+          return;
+        }
+      }
+
+      if (mounted) setState(() => _loadingMessage = 'Разбираем чертёж…');
       final document = await DxfParser().parseBytes(bytes);
 
       // На Android имя из file_selector не всегда содержит расширение
@@ -291,7 +349,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
         return;
       }
 
-      // Имя чертежа — без расширения исходного файла (.dxf/.bin и т.п.):
+      // Имя чертежа — без расширения исходного файла (.dxf/.dwg и т.п.):
       // оно идёт в заголовок и в имя экспортируемого файла («имя.dxf»).
       final drawingName = p.basenameWithoutExtension(file.name);
       final drawing = await _registerDrawing(bytes, drawingName);
@@ -953,7 +1011,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.folder_open),
-            tooltip: 'Открыть DXF',
+            tooltip: 'Открыть DXF/DWG',
             onPressed: _pickAndLoadDxf,
           ),
           if (_document != null) ...[
@@ -1041,13 +1099,13 @@ class _DrawingScreenState extends State<DrawingScreen> {
               ),
       ),
       body: _isLoading
-          ? const Center(
+          ? Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 16),
-                  Text('Загрузка и парсинг DXF...'),
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: 16),
+                  Text(_loadingMessage),
                 ],
               ),
             )
@@ -1126,7 +1184,7 @@ class _DrawingScreenState extends State<DrawingScreen> {
             const SizedBox(height: 12),
             OutlinedButton.icon(
               icon: const Icon(Icons.folder_open),
-              label: const Text('Открыть DXF'),
+              label: const Text('Открыть DXF/DWG'),
               onPressed: _pickAndLoadDxf,
               style: OutlinedButton.styleFrom(
                 padding:

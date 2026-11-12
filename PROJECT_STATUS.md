@@ -169,15 +169,40 @@ GitHub Actions (`.github/workflows/ci.yml`) выполняет проверку 
 синтетический проект с фото — `dart run tool/generate_test_bundle.dart`
 (результаты в `build/test_data/`).
 
-## 14. Известные ограничения
+## 14. DWG: нативный слой (`native/`)
+
+DWG — закрытый формат, поэтому путь выбран по лицензионным соображениям:
+**acadrust** (Rust, MPL-2.0) читает DWG R12–R2018+ нативно и не требует
+Autodesk/ODA. MPL-2.0 — «файловый» copyleft: код приложения остаётся MIT.
+
+- `native/menzulka_cad` — cdylib с C ABI:
+  `menzulka_dwg_to_dxf(байты, каталог, out/err)`, `menzulka_free`, `menzulka_version`.
+  Внутри — временные файлы в переданном каталоге, `DwgReader` → `DxfWriter`,
+  `catch_unwind`; коды ошибок: 0 — ок, 1 — вход, 2 — версия, 3 — повреждён,
+  4 — пароль, 5 — внутренняя.
+- Dart: `lib/services/cad_format.dart` (сигнатуры AC10xx, бинарный DXF),
+  `native_cad_bindings.dart` (FFI, поиск библиотеки), `cad_converter.dart`
+  (изолят + таймаут 3 мин, `CadConversionException`).
+- Сборка: `tool/build_native.ps1` → `menzulka_cad.dll` (Windows, копируется в
+  каталог сборки через `POST_BUILD` в `windows/CMakeLists.txt`) и
+  `android/app/src/main/jniLibs/<abi>/libmenzulka_cad.so`.
+- Фикстура для тестов: `cargo run --release --example make_fixture -- assets/empty.dxf test/fixtures/sample_r2018.dwg`.
+- Без собранной библиотеки приложение работает с DXF, а DWG-вход показывает
+  «Модуль DWG недоступен»; интеграционные тесты в этом случае пропускаются.
+- Не распространяем: ODA File Converter/Autodesk (только ссылка как запасной
+  ручной способ), LibreDWG (GPLv3).
+
+## 15. Известные ограничения
 
 - Не поддерживаются: `HATCH`, `MLINE`, `MULTILEADER`, `IMAGE/WIPEOUT`,
   `ATTDEF/ATTRIB`, `REGION` (пропускаются).
 - `SPLINE` рисуется приближением по опорным/подгоночным точкам (не точный NURBS).
 - На общем виде подписи показываются выборочно (без перекрытий); полный текст —
   при приближении.
+- DWG: не подгружаются XREF и часть объектов Civil 3D (прокси-графика — частично);
+  защищённые паролем файлы требуют предварительной расшифровки.
 
-## 15. Полезные мелочи
+## 16. Полезные мелочи
 
 - Не копировать `build/`, `.dart_tool/`, `.idea/`, `windows/flutter/ephemeral/` —
   ломаются символические ссылки плагинов. После переноса проекта: `flutter clean`,

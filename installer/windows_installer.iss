@@ -1,5 +1,5 @@
 #define AppName "Мензулка"
-#define AppVersion "1.16.2"
+#define AppVersion "1.17.0"
 #define AppExe "menzulka.exe"
 
 [Setup]
@@ -31,6 +31,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "..\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Лицензия приложения и уведомления о сторонних компонентах (MPL-2.0 и др.)
+Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"

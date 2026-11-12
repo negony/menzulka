@@ -38,3 +38,13 @@ target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
+
+# Нативный модуль DWG → DXF: копируем рядом с exe, если он собран
+# (сборка: tool/build_native.ps1).
+set(MENZULKA_CAD_DLL "${CMAKE_CURRENT_SOURCE_DIR}/../../native/windows/menzulka_cad.dll")
+if(EXISTS "${MENZULKA_CAD_DLL}")
+  add_custom_command(TARGET ${BINARY_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${MENZULKA_CAD_DLL}" "$<TARGET_FILE_DIR:${BINARY_NAME}>/menzulka_cad.dll"
+    COMMENT "Копирование menzulka_cad.dll")
+endif()
