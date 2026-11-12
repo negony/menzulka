@@ -18,6 +18,9 @@ jobs:
       - name: Flutter
         uses: subosito/flutter-action@v2
         with:
+          # Версия закреплена под проект: в новых stable `package:flutter/material.dart`
+          # объявлен устаревшим, и анализ на другой версии даёт ложные замечания.
+          flutter-version: '3.47.7'
           channel: stable
           cache: true
 
