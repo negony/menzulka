@@ -266,19 +266,14 @@ class _DrawingScreenState extends State<DrawingScreen> {
         });
       }
 
+      // На Android системный выбор файлов фильтрует по MIME, а у DWG
+      // стандартного MIME нет — такой файл становится невыделяемым. Поэтому
+      // разрешаем любые файлы и определяем формат по содержимому (сигнатуре),
+      // расширения важны только на десктопе.
       const typeGroup = XTypeGroup(
         label: 'Чертежи DXF/DWG',
         extensions: ['dxf', 'dwg'],
-        mimeTypes: [
-          'application/dxf',
-          'application/x-dxf',
-          'application/acad',
-          'application/x-acad',
-          'image/vnd.dwg',
-          'application/dwg',
-          'text/plain',
-          '*/*'
-        ],
+        mimeTypes: ['*/*'],
       );
 
       final file = await openFile(acceptedTypeGroups: [typeGroup]);

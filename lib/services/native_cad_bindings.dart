@@ -18,6 +18,7 @@ typedef _DwgToDxfNative = Int32 Function(
   Pointer<Uint8> input,
   UintPtr inputLen,
   Pointer<Utf8> workDir,
+  Uint32 flags,
   Pointer<Pointer<Uint8>> outPtr,
   Pointer<UintPtr> outLen,
   Pointer<Pointer<Uint8>> errPtr,
@@ -28,6 +29,7 @@ typedef _DwgToDxfDart = int Function(
   Pointer<Uint8> input,
   int inputLen,
   Pointer<Utf8> workDir,
+  int flags,
   Pointer<Pointer<Uint8>> outPtr,
   Pointer<UintPtr> outLen,
   Pointer<Pointer<Uint8>> errPtr,
@@ -43,6 +45,14 @@ typedef _VersionDart = Pointer<Utf8> Function();
 class NativeCadLibrary {
   NativeCadLibrary._();
 
+  /// Опция нативного слоя: убрать геометрию блоков, на которые нет вставок.
+  ///
+  /// В чертежах Civil 3D часто остаются огромные блоки от удалённых
+  /// 3D-поверхностей: файл 51 МБ даёт DXF 306 МБ, из которых 1 025 697 линий
+  /// лежат в блоках без единого INSERT. Без фильтра такой DXF не помещается
+  /// в память телефона.
+  static const int flagFilterUnusedBlocks = 1;
+
   static const String _windowsLibrary = 'menzulka_cad.dll';
   static const String _androidLibrary = 'libmenzulka_cad.so';
 
@@ -50,7 +60,7 @@ class NativeCadLibrary {
   static bool _openAttempted = false;
   static String? _loadError;
 
-  /// Поддерживается ли платформа вообще (приложение собирается под Android/Windows).
+  /// Поддерживается ли платформа вообще.
   static bool get isSupportedPlatform =>
       Platform.isWindows || Platform.isAndroid;
 
@@ -113,7 +123,14 @@ class NativeCadLibrary {
   }
 
   /// Конвертирует DWG-байты в DXF-байты. Бросает [CadConversionException].
-  static Uint8List convert(Uint8List dwg, String workDir) {
+  ///
+  /// [flags] — опции нативного слоя; по умолчанию включена фильтрация
+  /// неиспользуемых блоков (большой выигрыш по размеру и памяти).
+  static Uint8List convert(
+    Uint8List dwg,
+    String workDir, {
+    int flags = flagFilterUnusedBlocks,
+  }) {
     final lib = _open();
     if (lib == null) {
       throw CadConversionException(
@@ -143,6 +160,7 @@ class NativeCadLibrary {
         inputPtr,
         dwg.length,
         workDirPtr,
+        flags,
         outPtr,
         outLen,
         errPtr,

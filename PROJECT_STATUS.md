@@ -176,10 +176,14 @@ DWG — закрытый формат, поэтому путь выбран по
 Autodesk/ODA. MPL-2.0 — «файловый» copyleft: код приложения остаётся MIT.
 
 - `native/menzulka_cad` — cdylib с C ABI:
-  `menzulka_dwg_to_dxf(байты, каталог, out/err)`, `menzulka_free`, `menzulka_version`.
-  Внутри — временные файлы в переданном каталоге, `DwgReader` → `DxfWriter`,
-  `catch_unwind`; коды ошибок: 0 — ок, 1 — вход, 2 — версия, 3 — повреждён,
-  4 — пароль, 5 — внутренняя.
+  `menzulka_dwg_to_dxf(байты, каталог, flags, out/err)`, `menzulka_free`,
+  `menzulka_version`. Внутри — временные файлы в переданном каталоге,
+  `DwgReader` → `DxfWriter`, `catch_unwind`; коды ошибок: 0 — ок, 1 — вход,
+  2 — версия, 3 — повреждён, 4 — пароль, 5 — внутренняя.
+- `flags`: бит 0 (`FLAG_FILTER_UNUSED_BLOCKS`) — вырезать геометрию блоков без
+  INSERT. Реальный чертёж Civil 3D 51 МБ (R2007): без фильтра DXF 306 МБ и
+  1 025 697 линий в трёх блоках без вставок; с фильтром — DXF 41 МБ, чтение
+  ~10 с на ПК, разбор 1,5 с, 19 332 сущности, 63 слоя.
 - Dart: `lib/services/cad_format.dart` (сигнатуры AC10xx, бинарный DXF),
   `native_cad_bindings.dart` (FFI, поиск библиотеки), `cad_converter.dart`
   (изолят + таймаут 3 мин, `CadConversionException`).
